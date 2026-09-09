@@ -1,0 +1,1108 @@
+---
+title: "THE BIG PROJECT"
+author: "Mohamed_Hassan"
+date: "2025-10-19"
+output: html_document
+---
+#Loading required libraries
+```{r }
+library(GEOquery)
+gse_list <- unique(c("GSE48350","GSE5281","GSE15222","GSE11882")) 
+GSE <- lapply(c(gse_list), function(x) getGEO(x)[[1]])
+names(GSE) <- gse_list
+```
+
+##  Save lists of studies
+
+
+
+```{r}
+arraysP=GSE
+dir.create("./Data", recursive = TRUE)
+save(arraysP, file = "./Data/arrays.RData")
+```
+
+##Choose the right study
+##good
+
+```{r}
+array = arraysP[["GSE48350"]]                                                  #
+meta350=pData(array) 
+sum(is.na(meta350$`gender:ch1`))
+```
+
+```{r}
+array = arraysP[["GSE5281"]]
+meta281=pData(array)
+sum(is.na(meta281$`Sex:ch1`))
+```
+## 56
+
+
+## not good 
+
+```{r}
+array = arraysP[["GSE15222"]]   
+meta222=pData(array)
+sum(is.na(meta222$`gender:ch1`))
+```
+
+##187
+
+## not good 
+
+```{r}
+array = arraysP[["GSE11882"]]
+meta882=pData(array)
+sum(is.na(meta882))
+
+```
+
+##0 
+
+##GSE11882 only control not good 
+
+
+# Standarization of all ExpressionSets to make easier further analyses.
+# We save three columns from phenotipic data:
+## sex("male" or "female")
+## brain_region(Options will be set to "HC","SFG","PCG" and "EC" in 03 script)
+# Current categories are kept for a better understanding of data with
+# data exploratory analysis.
+## disease("case" or "control")
+
+```{r}
+library(Biobase)
+array = arraysP[["GSE48350"]]
+
+meta350 = pData(array)                  
+
+dplot350 = data.frame(sex=tolower(meta350$`gender:ch1`),
+                      brain_region=tolower(meta350$`brain region:ch1`),
+                      group=tolower(meta350$title))
+
+rownames(dplot350) = rownames(meta350)
+
+dplot350$group = as.character(dplot350$group)
+
+dplot350$group[grepl(pattern = "ad",x=dplot350$group)] <- "case"
+dplot350$group[grepl(pattern = "indiv",x=dplot350$group)] <- "control"                     
+colnames(dplot350)[3] = "disease"
+dplot350 = dplot350[,c("sex","brain_region","disease")]
+pData(array) = dplot350
+array = array[complete.cases(exprs(array)),]
+arraysP[["GSE48350"]] = array
+
+save(dplot350, file = "./Data/dplot350.RData")    
+dir.create("./Output", recursive = TRUE)
+save(arraysP, file = "./Output/arrays_st.RData")
+```
+
+##data filtering and counting
+
+
+
+```{r}
+library(dplyr)
+
+print(
+  paste("male  samble count =",nrow(dplot350 %>% 
+       filter(sex=="male"))))
+print(
+  paste("male control samble count =",nrow(dplot350 %>% 
+       filter(sex=="male",disease == "control"))))
+  
+  dplot350 %>%
+ filter(sex == "male", disease == "control") %>%
+  count(brain_region)
+
+```
+
+
+```{r}
+library(dplyr)
+
+print(
+  paste("male  samble count =",nrow(dplot350 %>% 
+       filter(sex=="male"))))
+print(
+  paste("male case samble count =",nrow(dplot350 %>% 
+       filter(sex=="male",disease == "case"))))
+  
+  dplot350 %>%
+ filter(sex == "male", disease == "case") %>%
+  count(brain_region)
+```
+
+
+```{r}
+library(dplyr)
+
+print(
+  paste("female  samble count =",nrow(dplot350 %>% 
+       filter(sex=="female"))))
+print(
+  paste("female control samble count =",nrow(dplot350 %>% 
+       filter(sex=="female",disease == "control"))))
+  
+  dplot350 %>%
+ filter(sex == "female", disease == "control") %>%
+  count(brain_region)
+```
+
+
+```{r}
+print(
+  paste("female  samble count =",nrow(dplot350 %>% 
+       filter(sex=="female"))))
+print(
+  paste("female case samble count =",nrow(dplot350 %>% 
+       filter(sex=="female",disease == "case"))))
+  
+  dplot350 %>%
+ filter(sex == "female", disease == "case") %>%
+  count(brain_region)
+```
+
+# Here we normalize expression data when necessary,
+# annotate probes, filter outliers, adapt brain region
+# codes (phenotipic data) and select only samples from
+# the selected brain regions ( "PCG","SFG","HC","EC" ).
+
+
+```{r}
+
+library(Biobase)
+library(dplyr)
+library(oligo)
+
+
+```
+# Function to pick median values when duplicated genes
+
+```{r}
+medianReps <- function(matriz){
+  ID <- as.character(rownames(matriz))
+  ID <- factor(ID, levels = unique(ID))
+  df <- by(matriz, ID, function(x) apply(x, 2, stats::median))
+  mat <- do.call("rbind", df)
+  return(mat)
+}
+```
+
+######### GSE48350 #########
+# Preproccess expression matrix with log2 transform
+# minimum value is set to 1 before transformation to get minimum equal to 0
+
+```{r}
+array <- arraysP[["GSE48350"]]
+exprs(array) <- exprs(array) + (abs(min(exprs(array))) + 1)
+exprs(array) <- log2(exprs(array))
+```
+
+# Formatting of brain region column and filter selected regions
+```{r}
+df <- pData(array)
+df$brain_region <- as.character(df$brain_region)
+df$brain_region[grepl("post-central gyrus",x = df$brain_region)] <- "PCG"
+df$brain_region[grepl("postcentral gyrus",x = df$brain_region)] <- "PCG"
+df$brain_region[grepl("superior frontal gyrus",x = df$brain_region)] <- "SFG"
+df$brain_region[grepl("hippocampus",x = df$brain_region)] <- "HC"
+df$brain_region[grepl("entorhinal cortex",x = df$brain_region)] <- "EC"
+pData(array) <- df
+array <- array[,df$brain_region %in% c("PCG","SFG","HC","EC")]
+
+```
+
+
+# Annotation of probes with gene symbol and Entrez ID
+# Select median values when duplicated genes
+
+```{r}
+genedata <- fData(array)
+colnames(genedata)
+colnames(genedata)[colnames(genedata) == "Gene Symbol"] <- "Symbol"
+colnames(genedata)[colnames(genedata) == "ENTREZ_GENE_ID"] <- "Entrez_Gene_ID"
+colnames(genedata)
+genedata <- genedata[,c("Symbol","Entrez_Gene_ID")]
+genedata$Symbol <- sub(" ///.*","",genedata$Symbol)
+genedata$Entrez_Gene_ID <- sub(" ///.*","",genedata$Entrez_Gene_ID)
+exprs0 <- exprs(array)
+rownames(exprs0) <- genedata$Symbol
+exprs0 <- medianReps(exprs0)
+exprs0 <- exprs0[rownames(exprs0) != "",]
+genedata <- genedata[match(rownames(exprs0),genedata$Symbol),c("Symbol","Entrez_Gene_ID")]
+rownames(genedata) <- genedata$Symbol
+```
+# Build the new preprocessed ExpressionSet and save it in list of arrays
+
+```{r}
+proc_array <- new("ExpressionSet",
+                  exprs=exprs0,
+                  annotation=annotation(array))
+fData(proc_array) <- genedata
+pData(proc_array) <- pData(array)
+
+arraysP[["GSE48350"]] <- proc_array
+
+```
+
+
+#Differential expression analysis (DEA)
+# with the following contrasts:
+# contrast 1 -> femalecase - femalecontrol,
+# contrast 2 -> malecase - malecontrol,
+# contrast 3-> malecase - femalecase,
+# contrast 4-> all case -all control
+# DEA applied to ALL tissues,"PCG","SFG","HC","EC"
+
+# load libraries
+
+```{r}
+library(Biobase)
+library(limma)
+library(dplyr)
+library(clusterProfiler)
+library(org.Hs.eg.db)      # Database للجينات البشرية
+library(ReactomePA)
+library(enrichplot)
+library(ggrepel)
+library(ggplot2)
+library(ggplot2)
+library(ggrepel)
+```
+
+# Differential expression function
+```{r}
+diffexprs <- function(X,batch=F){
+  sexdisease=vector("list",ncol(X))
+  for(i in seq_along(sexdisease)) {
+    sexdisease[[i]]=paste(pData(X)[,"sex"][i],pData(X)[,"disease"][i],sep="")
+  }
+  
+  sexdisease=factor(unlist(sexdisease))
+  
+  # Consider batch effect or not(default)
+  if (batch==T){
+    batch=factor(pData(X)[,"batch"])
+    design <- model.matrix(~ 0 + sexdisease + batch)
+  } else {
+    design <- model.matrix(~ 0 + sexdisease)
+  }
+  
+  colnames(design)[1:4] <- levels(sexdisease)
+  fit <- lmFit(X,design)
+  cont.matrix <- makeContrasts(dif1=femalecase - femalecontrol,
+                               dif2=malecase - malecontrol,
+                               dif12=malecase -femalecase,
+                               dif4=(femalecase + malecase)/2 - (femalecontrol + malecontrol)/2,
+                               levels = design)
+  fit2 <- contrasts.fit(fit,cont.matrix)
+  fit2 <- eBayes(fit2)
+  return(fit2)
+}
+
+
+wd <- "./Results/DEA/"
+dir.create(wd, recursive = TRUE)
+
+# Empty lists of results
+ALLfit <- list()
+HCfit<- list()
+PCGfit <- list()
+ECfit <- list()
+SFGfit <- list()
+for (study in names(arraysP)){
+  array <- arraysP[[study]]
+  # All tissues DEA
+  fit <- diffexprs(array)
+  ALLfit[[study]] <- fit
+  # Write significant
+  for (i in c(1:4)){
+    cont <- topTable(fit,coef = i,adjust="BH",sort="none",n=Inf)
+    cont <- cont[cont$adj.P.Val<0.05,]
+    write.csv(cont,paste0(wd,study,"_ALL_cont",i,".csv"))
+  }
+  # HC differential expression
+  if("HC" %in% pData(array)$brain_region) {
+    filtered <- array[,pData(array)$brain_region == "HC"]
+    fit <- diffexprs(filtered)
+    HCfit[[study]] <- fit
+    for (i in c(1:4)){
+      cont <- topTable(fit,coef = i,adjust="BH",sort="none",n=Inf)
+      cont <- cont[cont$adj.P.Val<0.05,]
+      write.csv(cont,paste0(wd,study,"_HC_cont",i,".csv"))
+    }
+  }
+  # PCG differential expression
+  if("PCG" %in% pData(array)$brain_region) {
+    filtered <- array[,pData(array)$brain_region == "PCG"]
+    fit <- diffexprs(filtered)
+    PCGfit[[study]] <- fit
+    for (i in c(1:4)){
+      cont <- topTable(fit,coef = i,adjust="BH",sort="none",n=Inf)
+      cont <- cont[cont$adj.P.Val<0.05,]
+      write.csv(cont,paste0(wd,study,"_PCG_cont",i,".csv"))
+    }
+  }
+  # EC differential expression
+  if("EC" %in% pData(array)$brain_region) {
+    filtered <- array[,pData(array)$brain_region == "EC"]
+    fit <- diffexprs(filtered)
+    ECfit[[study]] <- fit
+    for (i in c(1:4)){
+      cont <- topTable(fit,coef = i,adjust="BH",sort="none",n=Inf)
+      cont <- cont[cont$adj.P.Val<0.05,]
+      write.csv(cont,paste0(wd,study,"_EC_cont",i,".csv"))
+    }
+  }
+  #SFG differential expression
+  if("SFG" %in% pData(array)$brain_region) {
+    filtered <- array[,pData(array)$brain_region == "SFG"]
+    fit <- diffexprs(filtered)
+    SFGfit[[study]] <- fit
+    for (i in c(1:4)){
+      cont <- topTable(fit,coef = i,adjust="BH",sort="none",n=Inf)
+      cont <- cont[cont$adj.P.Val<0.05,]
+      write.csv(cont,paste0(wd,study,"_SFG_cont",i,".csv"))
+    }
+  }
+}
+# Save lists of "fit" objects
+save(ALLfit, file = "./Output/ALLfit.RData")
+save(HCfit, file = "./Output/HCfit.RData")
+save(PCGfit, file = "./Output/PCGfit.RData")
+save(ECfit, file = "./Output/ECfit.RData")
+save(SFGfit, file = "./Output/SFGfit.RData")
+```
+
+
+```{r}
+
+library(ggplot2)
+library(ggrepel)
+
+treasure_theme=theme(
+  
+  plot.title = element_text(hjust = 0.5,size=30,face = "bold"),
+  
+  axis.text.x = element_text( size = 15, angle = 45, hjust = .5, vjust = 0.5, face = "bold"),
+  
+  axis.text.y = element_text( size = 15, angle = 0, hjust = 1, vjust = 0, face = "bold"),
+  
+  axis.title.x = element_text( size = 20, angle = 0, hjust = .5, vjust = 0, face = "bold"),
+  
+  axis.title.y = element_text( size = 20, angle = 90, hjust = .5, vjust = .5, face = "bold"),
+  
+  #legend.title=element_text(size=20),
+  
+  legend.title=element_blank(), # remove legend title name
+  
+  legend.text = element_text(size=15,face="plain"),
+  
+  strip.text = element_text(size = 15,face="plain") ,
+  
+  legend.position="right",
+  
+  # for transparent background
+  
+  panel.background = element_rect(fill = "transparent"), # bg of the panel
+  
+  plot.background = element_rect(fill = "transparent", color = NA), # bg of the plot
+  
+  panel.grid.major = element_blank(), # get rid of major grid
+  
+  panel.grid.minor = element_blank(), # get rid of minor grid
+  
+  legend.background = element_rect(fill = "transparent"), # get rid of legend bg
+  
+  legend.box.background = element_rect(fill = "transparent"), # get rid of legend panel bg
+  
+  axis.line = element_line(colour = "black") # adding a black line for x and y axis
+  
+)
+make_expr_function = function(name, expr_body, args = alist(x = )) {
+ 
+  expr_body = substitute(expr_body)
+  
+  
+  f = function() {}
+  cat("✅ Step 1: Empty function created\n")
+  
+  
+  formals(f) <- args
+  cat("✅ Step 2: Arguments set to:\n")
+  print(formals(f))
+  
+  
+  body(f) = expr_body
+  cat("✅ Step 3: Body set to:\n")
+  print(body(f))
+  
+  assign(name, f, envir = .GlobalEnv)
+  cat("✅ Step 4: Function assigned to name:", name, "\n")
+  
+  message(paste("🎉 Function", name, "created successfully!"))
+}
+```
+
+
+#Functionmaker
+#volcano_plot
+
+
+```{r}
+make_expr_function("volcano_plot",args = alist(data = , top_n = 50, fc_cutoff = 1, treasure_theme = NULL),
+  expr_body = {
+    
+    # إنشاء عمود group
+    data$group <- ifelse(data$logFC > fc_cutoff, "Up",
+                         ifelse(data$logFC < -fc_cutoff, "Down", "Moderate"))
+    
+    # اختيار أعلى N جينات من كل نوع
+    top_up <- data %>%
+      filter(group == "Up") %>%
+      arrange(desc(logFC)) %>%
+      head(top_n)
+    
+    top_down <- data %>%
+      filter(group == "Down") %>%
+      arrange(logFC) %>%
+      head(top_n)
+    
+    top_genes <- rbind(top_up, top_down)
+    
+    # رسم الفولكينو بلوت
+    p <- ggplot(data, aes(x = logFC, y = -log10(adj.P.Val), color = group)) +
+      geom_point(alpha = 0.8, size = 2) +
+      scale_color_manual(values = c("Up" = "red", "Down" = "blue", "Moderate" = "grey")) +
+      geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "black") +
+      geom_text_repel(
+        data = top_genes,
+        aes(label = Symbol),
+        size = 3,
+        max.overlaps = 20
+      ) +
+      labs(
+        title = "Volcano Plot with Top Genes",
+        x = "log2 Fold Change",
+        y = "-log10(adj.P.Val)",
+        color = ""
+      )
+    
+    if (!is.null(treasure_theme)) p <- p + treasure_theme
+    
+    print(p)
+  })
+# volcano_plot(data = ALL_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+
+
+
+#Functionmaker
+
+#Enrishmint 
+
+
+
+```{r}
+make_expr_function(
+  name = "enrichment_function",
+  expr_body = {
+    library(clusterProfiler)
+    library(org.Hs.eg.db)
+    library(ReactomePA)
+    library(enrichplot)
+    library(ggplot2)
+    
+    cat("🚀 Running enrichment pipeline on dataset...\n")
+    
+    # فلترة الجينات المهمة
+    deg_data <- subset(x, adj.P.Val < 0.05)
+    
+    # تقسيم الجينات إلى up/down
+    up_ids   <- deg_data$Entrez_Gene_ID[deg_data$logFC > 0]
+    down_ids <- deg_data$Entrez_Gene_ID[deg_data$logFC < 0]
+    
+    # ---------------- GO Enrichment ----------------
+    ego_up <- enrichGO(gene          = up_ids,
+                       OrgDb         = org.Hs.eg.db,
+                       ont           = "BP",
+                       pAdjustMethod = "BH",
+                       pvalueCutoff  = 0.05,
+                       readable      = TRUE)
+    
+    ego_down <- enrichGO(gene          = down_ids,
+                         OrgDb         = org.Hs.eg.db,
+                         ont           = "BP",
+                         pAdjustMethod = "BH",
+                         pvalueCutoff  = 0.05,
+                         readable      = TRUE)
+    
+    # ---------------- KEGG Enrichment ----------------
+    ekegg_up <- enrichKEGG(gene         = up_ids,
+                           organism     = 'hsa',
+                           pvalueCutoff = 0.05)
+    
+    ekegg_down <- enrichKEGG(gene         = down_ids,
+                             organism     = 'hsa',
+                             pvalueCutoff = 0.05)
+    
+    # ---------------- Reactome Enrichment ----------------
+    ereact_up <- enrichPathway(gene         = up_ids,
+                               organism     = "human",
+                               pvalueCutoff = 0.05,
+                               readable     = TRUE)
+    
+    ereact_down <- enrichPathway(gene         = down_ids,
+                                 organism     = "human",
+                                 pvalueCutoff = 0.05,
+                                 readable     = TRUE)
+    
+    # ---------------- عرض النتائج ----------------
+    cat("\n🧠 Top Reactome (Up):\n")
+    print(head(ereact_up))
+    cat("\n🧠 Top Reactome (Down):\n")
+    print(head(ereact_down))
+    
+  # ---------------- Bar plots ----------------
+print(barplot(ego_up, showCategory = 10, title = "GO BP - Upregulated"))
+print(barplot(ego_down, showCategory = 10, title = "GO BP - Downregulated"))
+
+print(barplot(ekegg_up, showCategory = 10, title = "KEGG - Upregulated"))
+print(barplot(ekegg_down, showCategory = 10, title = "KEGG - Downregulated"))
+
+print(barplot(ereact_up, showCategory = 10, title = "Reactome - Upregulated"))
+print(barplot(ereact_down, showCategory = 10, title = "Reactome - Downregulated"))
+
+# ---------------- Emapplots ----------------
+if (nrow(as.data.frame(ereact_up)) > 1) {
+  print(emapplot(pairwise_termsim(ereact_up), showCategory = 10) +
+        ggtitle("Reactome Enrichment - Upregulated genes"))
+}
+
+if (nrow(as.data.frame(ereact_down)) > 1) {
+  print(emapplot(pairwise_termsim(ereact_down), showCategory = 10) +
+        ggtitle("Reactome Enrichment - Downregulated genes"))
+}
+    
+    cat("✅ Enrichment analysis completed!\n")
+    
+    # رجّع النتائج كـ list لو حبيت تستخدمها
+    list(
+      GO_up = ego_up,
+      GO_down = ego_down,
+      KEGG_up = ekegg_up,
+      KEGG_down = ekegg_down,
+      Reactome_up = ereact_up,
+      Reactome_down = ereact_down
+    )
+  },
+  args = alist(x = )
+)
+
+
+#result= enrichment_function(x)
+
+
+
+#frist datafram =head(ereact_up)
+#second datafram=head(ereact_down)
+```
+
+# contrast 1 -> femalecase - femalecontrol,
+#import dataset 
+
+
+#*GSE48350_ALL_count1.csv=ALL_count1
+
+```{r}
+#ALL_cont1//volcano_plot
+ volcano_plot(data = ALL_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+
+```{r}
+#ALL_cont1//enrichment
+enrichment_function(ALL_cont1)
+```
+
+
+#*GSE48350_EC_count1.csv=EC_cont1
+
+```{r}
+#EC_cont1//volcano_plot
+
+volcano_plot(data = EC_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+#*GSE48350_HC_count1.csv=HC_cont1
+
+```{r}
+#HC_cont1//volcano_plot
+
+volcano_plot(data = HC_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+#*GSE48350_PCG_count1.csv=PCG_cont1
+
+```{r}
+
+#PCG_cont1//volcano_plot
+volcano_plot(data = PCG_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+
+```
+
+#*GSE48350_SFG_count1.csv=SFG_cont1
+
+```{r}
+#SFG_cont1//volcano_plot
+
+volcano_plot(data = SFG_cont1, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+```
+
+
+
+# contrast 2 -> malecase - malecontrol,
+#import dataset 
+
+
+#*GSE48350_ALL_count2.csv=ALL_count2
+
+```{r}
+#ALL_cont2//volcano_plot
+ volcano_plot(data = ALL_cont2, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+
+```{r}
+#ALL_cont2//enrichment
+enrichment_function(ALL_cont2)
+```
+
+
+#*GSE48350_EC_count2.csv=EC_cont2
+
+```{r}
+#EC_cont1//volcano_plot
+
+volcano_plot(data = EC_cont2, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+#*GSE48350_HC_count2.csv=HC_cont2
+
+```{r}
+#HC_cont2//volcano_plot
+
+volcano_plot(data = HC_cont2, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+#*GSE48350_PCG_count2.csv=PCG_cont2
+
+```{r}
+#PCG_cont2//volcano_plot
+volcano_plot(data = PCG_cont2, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+```
+
+#*GSE48350_SFG_count2.csv=SFG_cont2
+
+```{r}
+#SFG_cont1//volcano_plot
+
+volcano_plot(data = SFG_cont2, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+```
+
+# contrast 3-> malecase - femalecase,
+#import dataset 
+
+#*GSE48350_ALL_count3.csv
+
+```{r}
+#ALL_cont3//volcano_plot
+ volcano_plot(data = ALL_cont3, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+
+```{r}
+#ALL_cont3//enrichment
+enrichment_function(ALL_cont3)
+```
+
+
+#*GSE48350_EC_count3.csv=NULL
+#*GSE48350_HC_count3.csv=NULL
+#*GSE48350_PCG_count3.csv
+#*GSE48350_SFG_count3.csv
+
+
+```{r}
+
+
+#PCG_cont3//volcano_plot
+volcano_plot(data = PCG_cont3, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+
+
+#SFG_cont3//volcano_plot
+
+volcano_plot(data = SFG_cont3, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+
+```
+
+# contrast 4-> all case -all control
+
+#import dataset 
+#*GSE48350_ALL_count4.csv
+
+```{r}
+#ALL_cont4//volcano_plot
+ volcano_plot(data = ALL_cont4, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+```
+
+
+```{r}
+#ALL_cont4//enrichment
+enrichment_function(ALL_cont4)
+```
+
+
+#*GSE48350_EC_count4.csv
+#*GSE48350_HC_count4.csv
+#*GSE48350_PCG_count4.csv
+#*GSE48350_SFG_count4.csv
+
+
+```{r}
+#EC_cont4//volcano_plot
+
+volcano_plot(data = EC_cont4, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+#HC_cont4//volcano_plot
+
+volcano_plot(data = HC_cont4, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+#PCG_cont4//volcano_plot
+volcano_plot(data = PCG_cont4, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+
+
+#SFG_cont4//volcano_plot
+
+volcano_plot(data = SFG_cont4, top_n = 50, fc_cutoff = 1, treasure_theme = treasure_theme)
+
+
+```
+
+
+
+##########################################################################
+
+
+
+
+#pathfindR: An R Package for Enrichment Analysis Utilizing Active Subnetworks
+
+
+
+
+
+#############################################################################
+
+
+
+
+
+
+```{r}
+install.packages("pak") # if you have not installed "pak"
+pak::pkg_install("pathfindR")
+```
+
+```{r}
+library(pathfindR)
+
+
+```
+
+
+
+```{r}
+ALL_cont4_in=data.frame(
+  Gene_symbol = ALL_cont4$Symbol,
+  logFC = ALL_cont4$logFC,
+  FDR_p = ALL_cont4$adj.P.Val)
+
+
+output_ALL_cont4_ST <- run_pathfindR(ALL_cont4_in, gene_sets="Reactome",
+                                     pin_name_path = "STRING",output_dir="./Results/Reactome_STRING")
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r}
+clustered_df_fuzzy_ST <- cluster_enriched_terms(output_ALL_cont4_ST, method="fuzzy")
+
+# حفظ النتائج في ملف CSV
+write.csv(clustered_df_fuzzy_ST, file = "./Cluster/clustered_df_fuzzy_ST.csv", row.names = FALSE)
+```
+
+#Heatmap
+
+```{r}
+# مكتبات
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+# قراءة ملف CSV
+df <- read.csv("./Cluster/clustered_df_fuzzy_ST.csv")
+
+# اختيار أعلى 30 term حسب Fold_Enrichment
+top_terms <- df %>%
+  arrange(desc(Fold_Enrichment)) %>%
+  head(50)
+
+# تحويل البيانات لصيغة heatmap (Term_Description vs Cluster)
+df_heat <- top_terms %>%
+  select(Term_Description, Cluster, Fold_Enrichment) %>%
+  dcast(Term_Description ~ Cluster, value.var = "Fold_Enrichment", fill = 0)
+
+# تحويل للصيغة الطويلة للـ ggplot
+df_long <- melt(df_heat, id.vars = "Term_Description")
+
+# حفظ الرسم كـ PDF كبير وواضح
+pdf("Fuzzy_Clustering_Heatmap.pdf", width = 14, height = 12)  # حجم كبير
+ggplot(df_long, aes(x = variable, y = Term_Description, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  treasure_theme +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 12),
+    plot.title = element_text(size = 16, face = "bold")
+  ) +
+  labs(
+    x = "Cluster",
+    y = "Term Description",
+    fill = "Fold Enrichment",
+    title = "Fuzzy Clustering Heatmap (Top 30 Terms)"
+  )
+dev.off()
+
+# رسالة نجاح
+cat("Heatmap تم حفظه كـ 'Fuzzy_Clustering_Heatmap.pdf'\n")
+
+
+```
+
+
+#(Network plot) ///////////   Interaction Diagram 
+
+```{r}
+# 1️⃣ تجهيز البيانات
+input_processed <- input_processing(ALL_cont4_in)
+
+# 2️⃣ اختيار المسارات الممثلة فقط
+rep_terms <- subset(clustered_df_fuzzy_ST, Status == "Representative")
+
+# 3️⃣ ترتيبهم حسب أقل p-value
+rep_terms <- rep_terms[order(rep_terms$lowest_p), ]
+
+# 4️⃣ اختيار أول 10 مسارات فقط
+top10_terms <- head(rep_terms, 10)
+
+# 5️⃣ رسم المسارات المختارة
+gg_list <- visualize_terms(
+  result_df = top10_terms,
+  input_processed = input_processed,
+  is_KEGG_result = FALSE,
+  pin_name_path = "STRING"
+)
+
+# 6️⃣ إنشاء مجلد للحفظ (اختياري)
+if (!dir.exists("Top10_Pathways")) dir.create("Top10_Pathways")
+
+# 7️⃣ حفظ كل مسار كـ PDF منفصل
+for (term_id in names(gg_list)) {
+  ggplot2::ggsave(
+    filename = paste0("Top10_Pathways/", term_id, ".pdf"),
+    plot = gg_list[[term_id]],
+    width = 10,
+    height = 6
+  )
+  message("Saved: ", term_id)
+}
+```
+
+
+```{r}
+# 1️⃣ اختيار المسارات الممثلة فقط
+rep_terms <- subset(clustered_df_fuzzy_ST, Status == "Representative")
+
+# 2️⃣ استخراج الجينات من العمود الصحيح
+rep_terms$Up_regulated <- as.character(rep_terms$Up_regulated)
+rep_genes <- unlist(strsplit(rep_terms$Up_regulated, ";"))
+rep_genes <- unique(trimws(rep_genes))
+
+# 3️⃣ ربط الجينات بالتحليل التفاضلي الأصلي (DEGs)
+bio_marker_candidates <- ALL_cont4_in %>%
+  filter(Gene_symbol %in% rep_genes) %>%
+  arrange(FDR_p, desc(abs(logFC)))
+
+# 4️⃣ حفظ النتائج
+if (!dir.exists("Biomarkers")) dir.create("Biomarkers")
+write.csv(bio_marker_candidates, "./Biomarkers/biomarker_candidates.csv", row.names = FALSE)
+
+cat("✅ تم استخراج الجينات المرشحة كـ biomarkers من المسارات الممثلة وحفظها في './Biomarkers/'\n")
+
+
+```
+
+
+```{r}
+# 1️⃣ اختيار المسارات الممثلة فقط
+rep_terms <- subset(clustered_df_fuzzy_ST, Status == "Representative")
+
+# 2️⃣ استخراج الجينات من العمود الصحيح
+rep_terms$Down_regulated <- as.character(rep_terms$Down_regulated)
+rep_genes_dowen <- unlist(strsplit(rep_terms$Down_regulated, ";"))
+rep_genes_dowen<- unique(trimws(rep_genes_dowen))
+
+# 3️⃣ ربط الجينات بالتحليل التفاضلي الأصلي (DEGs)
+bio_marker_candidates_dowen <- ALL_cont4_in %>%
+  filter(Gene_symbol %in% rep_genes_dowen) %>%
+  arrange(FDR_p, desc(abs(logFC)))
+
+# 4️⃣ حفظ النتائج
+if (!dir.exists("Biomarkers")) dir.create("Biomarkers")
+write.csv(bio_marker_candidates_dowen, "./Biomarkers/biomarker_candidates_dowen.csv", row.names = FALSE)
+
+cat("✅ تم استخراج الجينات المرشحة كـ biomarkers من المسارات الممثلة وحفظها في './Biomarkers/'\n")
+
+
+```
+
+
+```{r}
+ALL_cont4_in_p=data.frame(
+  Gene_symbol = ALL_cont4$Symbol,
+  logFC = ALL_cont4$logFC,
+  FDR_p = ALL_cont4$P.Value)
+
+
+output_ALL_cont4_ST_p <- run_pathfindR(ALL_cont4_in_p, gene_sets="Reactome",
+                                     pin_name_path = "STRING",output_dir="./Results_p/Reactome_STRING")
+```
+
+
+
+```{r}
+genes_df <- data.frame(
+  Gene_symbol = ALL_cont4_in_p$Gene_symbol,
+  CHANGE = ALL_cont4_in_p$logFC,       # logFC للقيم
+  P.Value = ALL_cont4_in_p$FDR_p     # optional لو مطلوب
+)
+
+# رسم heatmap لأكثر 10 مسارات دلالة
+term_gene_heatmap(
+  result_df = result_df,
+  genes_df = genes_df,
+  num_terms = 30,
+  use_description = FALSE,
+  low = "red",
+  mid = "black",
+  high = "green",
+  legend_title = "logFC",
+  sort_terms_by_p = TRUE
+)
+```
+
+
+```{r}
+# تحميل المكتبة (لو مش محملها)
+library(pathfindR)
+
+# نفترض output_df هي النتائج الناتجة من pathfindR
+# الكلاستر باستخدام complete linkage
+clustered_df_st_p <- cluster_enriched_terms(
+  output_ALL_cont4_ST_p,
+  clu_method = "complete",  # طريقة التجميع
+  plot_hmap = TRUE,         # رسم heatmap للتشابه بين المصطلحات
+  plot_dend = TRUE          # رسم dendrogram لتوضيح العلاقات
+)
+
+# عرض أول 6 نتائج مع cluster assignment
+head(clustered_df_st_p)
+
+```
+
+
+```{r}
+clustered_df_fuzzy_ST_p <- cluster_enriched_terms(output_ALL_cont4_ST_p, method="fuzzy")
+```
+
+
+```{r}
+rep_terms <- subset(clustered_df_fuzzy_ST_p, Status == "Representative")
+
+# 2️⃣ استخراج الجينات من العمود الصحيح
+rep_terms$Down_regulated <- as.character(rep_terms$Down_regulated)
+rep_genes_dowen <- unlist(strsplit(rep_terms$Down_regulated, ";"))
+rep_genes_dowen<- unique(trimws(rep_genes_dowen))
+
+# 3️⃣ ربط الجينات بالتحليل التفاضلي الأصلي (DEGs)
+bio_marker_candidates_dowen <- ALL_cont4_in_p %>%
+  filter(Gene_symbol %in% rep_genes_dowen) %>%
+  arrange(FDR_p, desc(abs(logFC)))
+
+# 4️⃣ حفظ النتائج
+if (!dir.exists("Biomarkers_p")) dir.create("Biomarkers_p")
+write.csv(bio_marker_candidates_dowen, "./Biomarkers_p/biomarker_candidates_dowen.csv", row.names = FALSE)
+
+cat("✅ تم استخراج الجينات المرشحة كـ biomarkers من المسارات الممثلة وحفظها في './Biomarkers/'\n")
+
+```
+
+
+```{r}
+
+# 1️⃣ اختيار المسارات الممثلة فقط
+rep_terms <- subset(clustered_df_fuzzy_ST_p, Status == "Representative")
+
+# 2️⃣ استخراج الجينات من العمود الصحيح
+rep_terms$Up_regulated <- as.character(rep_terms$Up_regulated)
+rep_genes <- unlist(strsplit(rep_terms$Up_regulated, ";"))
+rep_genes <- unique(trimws(rep_genes))
+
+# 3️⃣ ربط الجينات بالتحليل التفاضلي الأصلي (DEGs)
+bio_marker_candidates_u <- ALL_cont4_in_p %>%
+  filter(Gene_symbol %in% rep_genes) %>%
+  arrange(FDR_p, desc(abs(logFC)))
+
+# 4️⃣ حفظ النتائج
+if (!dir.exists("Biomarkers_p")) dir.create("Biomarkers_p")
+write.csv(bio_marker_candidates_u, "./Biomarkers_p/biomarker_candidates_u.csv", row.names = FALSE)
+
+cat("✅ تم استخراج الجينات المرشحة كـ biomarkers من المسارات الممثلة وحفظها في './Biomarkers/'\n")
+
+```
+
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

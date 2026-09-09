@@ -1,0 +1,426 @@
+---
+title: "wgcnabrain"
+author: "Mohamed_Hassan"
+date: "2025-11-04"
+output: html_document
+---
+```{r}
+  devtools::install_github("kevinblighe/CorLevelPlot")
+
+```
+
+```{r}
+# script to perform WGCNA
+  
+
+library(WGCNA)
+library(DESeq2)
+library(GEOquery)
+library(tidyverse)
+library(CorLevelPlot)
+library(gridExtra)
+
+allowWGCNAThreads()          # allow multi-threading (optional)
+```
+# 1. Fetch Data
+
+```{r #1. Fetch Data}
+library(GEOquery)
+gse_list <- unique(c("GSE48350")) 
+GSE <- lapply(c(gse_list), function(x) getGEO(x)[[1]])
+names(GSE) <- gse_list
+arraysP=GSE
+
+```
+
+
+```{r #1. Fetch Data}
+array = arraysP[["GSE48350"]]   
+meta350=pData(array) 
+phenoData <- meta350[,c(1,2,48,47)]
+```
+
+
+```{r #1.Fetch Data}
+
+array = arraysP[["GSE48350"]]   
+data=exprs(array) 
+data[1:10,1:10]
+
+class(array)
+```
+
+# prepare data
+```{r #prepare data}
+
+
+
+```
+
+# 2. QC - outlier detection ------------------------------------------------
+# detect outlier genes
+
+```{r}
+gsg <- goodSamplesGenes(t(data) )
+summary(gsg)
+gsg$allOK
+
+
+```
+
+
+```{r}
+table(gsg$goodGenes)
+table(gsg$goodSamples)
+```
+
+
+# detect outlier samples - hierarchical clustering - method 1
+
+```{r}
+htree <- hclust(dist(t(data)), method = "average")
+plot(htree)
+```
+
+# pca - method 2 (another way)
+
+```{r}
+pca <- prcomp(t(data))
+ pca.dat <- pca$x
+ pca.var <- pca$sdev^2
+ pca.var.percent <- round(pca.var/sum(pca.var)*100, digits = 2)
+pca.dat <- as.data.frame(pca.dat)
+
+ ggplot(pca.dat, aes(PC1, PC2)) +
+  geom_point() +
+  geom_text(label = rownames(pca.dat)) +
+  labs(x = paste0('PC1: ', pca.var.percent[1], ' %'),
+       y = paste0('PC2: ', pca.var.percent[2], ' %'))
+ 
+```
+
+### NOTE: If there are batch effects observed, correct for them before moving ahead
+# exclude outlier samples
+
+```{r}
+samples.to.be.excluded <- c('GSM300303', 'GSM300272', 'GSM300172','GSM300171','GSM300305','GSM300320')
+data.subset <- data[,!(colnames(data) %in% samples.to.be.excluded)]
+
+```
+
+
+# 3. Normalization ----------------------------------------------------------------------
+# create a deseq2 dataset
+
+# exclude outlier samples
+
+```{r}
+library(dplyr)
+
+colData <- phenoData %>% 
+  filter(!row.names(.) %in% samples.to.be.excluded)
+
+```
+
+# fixing column names in colData
+
+```{r}
+names(colData)
+names(colData) <- gsub(':ch1', '', names(colData))
+names(colData) <- gsub('\\s', '_', names(colData))
+names(colData)
+```
+
+
+# making the rownames and column names identical
+
+```{r}
+all(rownames(colData) %in% colnames(data.subset))
+all(rownames(colData) == colnames(data.subset))
+```
+
+
+# 4. Network Construction  ---------------------------------------------------
+# Choose a set of soft-thresholding powers
+
+```{r}
+power <- c(c(1:10), seq(from = 12, to = 50, by = 2))
+
+```
+
+# Call the network topology analysis function
+
+```{r}
+
+norm.counts <- t(data.subset)
+
+sft <- pickSoftThreshold(norm.counts,
+                  powerVector = power,
+                  networkType = "signed",
+                  verbose = 5)
+
+
+sft.data <- sft$fitIndices
+```
+
+# visualization to pick power
+
+```{r}
+
+
+a1 <- ggplot(sft.data, aes(Power, SFT.R.sq, label = Power)) +
+  geom_point() +
+  geom_text(nudge_y = 0.1) +
+  geom_hline(yintercept = 0.6, color = 'red') +
+  labs(x = 'Power', y = 'Scale free topology model fit, signed R^2') +
+  theme_classic()
+
+
+a2 <- ggplot(sft.data, aes(Power, mean.k., label = Power)) +
+  geom_point() +
+  geom_text(nudge_y = 0.1) +
+  labs(x = 'Power', y = 'Mean Connectivity') +
+  theme_classic()
+  
+
+grid.arrange(a1, a2, nrow = 2)
+
+```
+# convert matrix to numeric
+
+```{r}
+
+norm.counts[] <- sapply(norm.counts, as.numeric)
+
+soft_power <- 18
+temp_cor <- cor
+cor <- WGCNA::cor
+
+```
+
+# memory estimate w.r.t blocksize
+```{r}
+
+bwnet <- blockwiseModules(norm.counts,
+                 maxBlockSize = 14000,
+                 TOMType = "signed",
+                 power = soft_power,
+                 mergeCutHeight = 0.25,
+                 numericLabels = FALSE,
+                 randomSeed = 1234,
+                 verbose = 3)
+
+
+cor <- temp_cor
+
+```
+
+# 5. Module Eigengenes ---------------------------------------------------------
+
+
+
+```{r}
+module_eigengenes <- bwnet$MEs
+
+```
+
+# Print out a preview
+
+```{r}
+head(module_eigengenes)
+```
+
+
+
+
+# get number of genes for each module
+
+
+
+```{r}
+table(bwnet$colors)
+```
+
+# Plot the dendrogram and the module colors before and after merging underneath
+# grey module = all genes that doesn't fall into other modules were assigned to the grey module
+
+```{r}
+geneTree <- hclust(as.dist(1 - TOMsimilarityFromExpr(norm.counts, power = 18)), method = "average")
+
+plotDendroAndColors(
+  geneTree,
+  bwnet$colors,
+  "Merged modules",
+  dendroLabels = FALSE,
+  addGuide = TRUE,
+  hang = 0.03
+)
+
+
+```
+
+
+# 6A. Relate modules to traits --------------------------------------------------
+# module trait associations
+
+
+
+# create traits file - binarize categorical variables
+
+```{r}
+traits <- colData %>% 
+  mutate(disease_state_bin = ifelse(grepl('AD', title), 1, 0)) %>% 
+  select(5)
+
+
+```
+
+
+# binarize categorical variables
+
+```{r}
+
+colData$gender <- factor(colData$gender, levels = c("male", "female"))
+
+gender.out <- binarizeCategoricalColumns(colData$gender,
+                           includePairwise = FALSE,
+                           includeLevelVsAll = TRUE,
+                           minCount = 1)
+
+
+traits <- cbind(traits, gender.out)
+
+
+```
+
+# Define numbers of genes and samples
+
+```{r}
+dim(module_eigengenes)
+# [1] 50 10   ← 50 عينة × 10 modules
+
+dim(traits)
+# [1] 48 2    ← 48 عينة × 2 traits
+
+```
+
+```{r}
+nSamples <- nrow(norm.counts)
+nGenes <- ncol(norm.counts)
+
+module.trait.corr <- cor(module_eigengenes, traits, use = 'p')
+module.trait.corr.pvals <- corPvalueStudent(module.trait.corr, nSamples)
+```
+
+
+# visualize module-trait association as a heatmap
+
+```{r}
+
+heatmap.data <- merge(module_eigengenes, traits, by = 'row.names')
+
+head(heatmap.data)
+
+heatmap.data <- heatmap.data %>% 
+  column_to_rownames(var = 'Row.names')
+
+
+
+
+CorLevelPlot(heatmap.data,
+             x = names(heatmap.data)[32:33],
+             y = names(heatmap.data)[1:31],
+             col = c("blue1", "skyblue", "white", "pink", "red"))
+
+
+module.gene.mapping <- data.frame(Gene = names(bwnet$colors),
+                                  Module = bwnet$colors)
+
+grey.gen <- module.gene.mapping %>% 
+  filter(Module == 'grey') %>% 
+  pull(Gene)
+
+head(grey.gen)
+
+```
+
+
+# prepare data
+```{r #prepare data}
+
+genedata <- fData(array)
+
+# probes اللي عايز تجيب أساميهم
+probe_ids <- c("117_at", "121_at", "1255_g_at", "1294_at", "1316_at", "1320_at")
+
+# استخراج الجينات المقابلة من genedata
+genes_from_probes <- genedata[rownames(genedata) %in% probe_ids, ]
+# عرض أسماء الجينات فقط (العمود Symbol)
+gene_symbols <- genes_from_probes$`Gene Symbol`
+
+# عرض النتيجة
+gene_symbols
+
+```
+
+# 6B. Intramodular analysis: Identifying driver genes ---------------
+
+
+
+# Calculate the module membership and the associated p-values
+
+# The module membership/intramodular connectivity is calculated as the correlation of the eigengene and the gene expression profile. 
+# This quantifies the similarity of all genes on the array to every module.
+
+
+```{r}
+
+module.membership.measure <- cor(module_eigengenes, norm.counts, use = 'p')
+module.membership.measure.pvals <- corPvalueStudent(module.membership.measure, nSamples)
+
+
+module.membership.measure.pvals[1:10,1:10]
+
+
+```
+
+# Calculate the gene significance and associated p-values
+
+
+
+# Using the gene significance you can identify genes that have a high significance for trait of interest 
+# Using the module membership measures you can identify genes with high module membership in interesting modules.
+
+
+
+```{r}
+gene.signf.corr <- cor(norm.counts, traits$disease_state_bin, use = 'p')
+gene.signf.corr.pvals <- corPvalueStudent(gene.signf.corr, nSamples)
+
+
+gene.signf.corr.pvals %>% 
+  as.data.frame() %>% 
+  arrange(V1) %>% 
+  head(25)
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
